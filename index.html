@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mis Tareas</title>
+<style>
+  body {
+    font-family: "Segoe UI", sans-serif;
+    background: #fff9d6;
+    color: #222;
+    max-width: 700px;
+    margin: 30px auto;
+    padding: 0 16px;
+  }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .fecha { color: #777; margin-bottom: 20px; }
+
+  /* Pestañas de proyectos */
+  .pestanas { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 2px solid #e0d58a; }
+  .pestana {
+    padding: 8px 14px;
+    background: #f3eaa9;
+    border: none;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .pestana.activa { background: #e0d58a; font-weight: bold; }
+  .pestana.nueva { background: transparent; color: #777; }
+
+  /* Formulario para agregar tarea */
+  form { display: flex; gap: 8px; margin: 20px 0; }
+  input[type=text] {
+    flex: 1;
+    padding: 8px;
+    font-size: 15px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+  button { cursor: pointer; }
+  .boton { padding: 8px 14px; border: none; border-radius: 4px; background: #333; color: white; }
+
+  /* Tablero de post-its */
+  ul {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 18px;
+  }
+  li {
+    position: relative;
+    min-height: 130px;
+    padding: 14px 12px;
+    background: #ffeb7a;
+    box-shadow: 2px 4px 8px rgba(0, 0, 0, 0.18);
+    transform: rotate(-1.5deg);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  /* Colores y giros distintos para que parezcan pegados a mano */
+  li:nth-child(4n+2) { background: #ffc4d6; transform: rotate(1.5deg); }
+  li:nth-child(4n+3) { background: #b8f0c4; transform: rotate(-0.5deg); }
+  li:nth-child(4n+4) { background: #b9dcff; transform: rotate(1deg); }
+  li span { flex: 1; cursor: pointer; font-size: 15px; word-wrap: break-word; }
+  li.hecha { opacity: 0.55; }
+  li.hecha span { text-decoration: line-through; }
+  li .borrar { position: absolute; top: 4px; right: 6px; border: none; background: none; color: #888; font-size: 14px; }
+  li .borrar:hover { color: red; }
+  li.vacio { background: none; box-shadow: none; transform: none; min-height: 0; }
+
+  .acciones { margin-top: 30px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .acciones button { background: none; border: 1px solid #aaa; border-radius: 4px; padding: 5px 10px; color: #555; }
+  .vacio { color: #999; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>Mis Tareas</h1>
+<div class="fecha" id="fecha"></div>
+
+<div class="pestanas" id="pestanas"></div>
+
+<form id="formulario">
+  <input type="text" id="nuevaTarea" placeholder="Escribí una tarea y apretá Enter..." autofocus>
+  <button class="boton">Agregar</button>
+</form>
+
+<ul id="lista"></ul>
+
+<div class="acciones">
+  <button onclick="borrarHechas()">Borrar tareas tachadas</button>
+  <button onclick="renombrarProyecto()">Renombrar proyecto</button>
+  <button onclick="borrarProyecto()">Borrar proyecto</button>
+</div>
+
+<script>
+  // ---------- DATOS ----------
+  // Todo se guarda en el navegador (localStorage), así que no se pierde al cerrar.
+  // Forma de los datos:
+  // { activo: "UNBOX DEVS", proyectos: { "UNBOX DEVS": [ {texto: "...", hecha: false}, ... ] } }
+
+  let datos = JSON.parse(localStorage.getItem("misTareas")) || {
+    activo: "UNBOX DEVS",
+    proyectos: { "UNBOX DEVS": [] }
+  };
+
+  // Limpieza de una sola vez: saca TakemyCard y Tesis que venían en la primera versión.
+  // Después de correr una vez no vuelve a tocar nada (por si más adelante creás proyectos con esos nombres).
+  if (!datos.limpiado) {
+    delete datos.proyectos["TakemyCard"];
+    delete datos.proyectos["Tesis"];
+    if (!datos.proyectos[datos.activo]) datos.activo = Object.keys(datos.proyectos)[0] || "UNBOX DEVS";
+    if (!datos.proyectos[datos.activo]) datos.proyectos[datos.activo] = [];
+    datos.limpiado = true;
+  }
+
+  function guardar() {
+    localStorage.setItem("misTareas", JSON.stringify(datos));
+  }
+
+  // ---------- DIBUJAR LA PANTALLA ----------
+  function dibujar() {
+    // Pestañas
+    const pestanas = document.getElementById("pestanas");
+    pestanas.innerHTML = "";
+    for (const nombre in datos.proyectos) {
+      const boton = document.createElement("button");
+      boton.className = "pestana" + (nombre === datos.activo ? " activa" : "");
+      boton.textContent = nombre;
+      boton.onclick = () => { datos.activo = nombre; guardar(); dibujar(); };
+      pestanas.appendChild(boton);
+    }
+    const nueva = document.createElement("button");
+    nueva.className = "pestana nueva";
+    nueva.textContent = "+ Proyecto";
+    nueva.onclick = nuevoProyecto;
+    pestanas.appendChild(nueva);
+
+    // Tareas del proyecto activo
+    const lista = document.getElementById("lista");
+    lista.innerHTML = "";
+    const tareas = datos.proyectos[datos.activo] || [];
+
+    if (tareas.length === 0) {
+      lista.innerHTML = '<li class="vacio">No hay tareas todavía.</li>';
+    }
+
+    tareas.forEach((tarea, i) => {
+      const li = document.createElement("li");
+      if (tarea.hecha) li.className = "hecha";
+
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = tarea.hecha;
+      check.onchange = () => tachar(i);
+
+      const texto = document.createElement("span");
+      texto.textContent = tarea.texto;
+      texto.onclick = () => tachar(i);
+
+      const borrar = document.createElement("button");
+      borrar.className = "borrar";
+      borrar.textContent = "✕";
+      borrar.title = "Borrar tarea";
+      borrar.onclick = () => { tareas.splice(i, 1); guardar(); dibujar(); };
+
+      li.append(check, texto, borrar);
+      lista.appendChild(li);
+    });
+  }
+
+  // ---------- ACCIONES ----------
+  function tachar(i) {
+    const tarea = datos.proyectos[datos.activo][i];
+    tarea.hecha = !tarea.hecha;
+    guardar();
+    dibujar();
+  }
+
+  document.getElementById("formulario").onsubmit = (e) => {
+    e.preventDefault();
+    const input = document.getElementById("nuevaTarea");
+    const texto = input.value.trim();
+    if (!texto) return;
+    datos.proyectos[datos.activo].push({ texto: texto, hecha: false });
+    input.value = "";
+    guardar();
+    dibujar();
+  };
+
+  function borrarHechas() {
+    datos.proyectos[datos.activo] = datos.proyectos[datos.activo].filter(t => !t.hecha);
+    guardar();
+    dibujar();
+  }
+
+  function nuevoProyecto() {
+    const nombre = prompt("Nombre del nuevo proyecto:");
+    if (!nombre || datos.proyectos[nombre]) return;
+    datos.proyectos[nombre] = [];
+    datos.activo = nombre;
+    guardar();
+    dibujar();
+  }
+
+  function renombrarProyecto() {
+    const viejo = datos.activo;
+    const nuevo = prompt("Nuevo nombre para " + viejo + ":", viejo);
+    if (!nuevo || nuevo === viejo || datos.proyectos[nuevo]) return;
+    // Rearmamos el objeto para que la pestaña quede en el mismo lugar
+    const proyectos = {};
+    for (const nombre in datos.proyectos) {
+      proyectos[nombre === viejo ? nuevo : nombre] = datos.proyectos[nombre];
+    }
+    datos.proyectos = proyectos;
+    datos.activo = nuevo;
+    guardar();
+    dibujar();
+  }
+
+  function borrarProyecto() {
+    if (Object.keys(datos.proyectos).length === 1) return alert("Tiene que quedar al menos un proyecto.");
+    if (!confirm("¿Borrar el proyecto " + datos.activo + " y todas sus tareas?")) return;
+    delete datos.proyectos[datos.activo];
+    datos.activo = Object.keys(datos.proyectos)[0];
+    guardar();
+    dibujar();
+  }
+
+  // Fecha de hoy arriba, estilo "martes 27 de octubre"
+  document.getElementById("fecha").textContent =
+    new Date().toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long" });
+
+  dibujar();
+</script>
+</body>
+</html>
