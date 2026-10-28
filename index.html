@@ -74,6 +74,58 @@
   .acciones { margin-top: 30px; display: flex; gap: 10px; flex-wrap: wrap; }
   .acciones button { background: none; border: 1px solid #aaa; border-radius: 4px; padding: 5px 10px; color: #555; }
   .vacio { color: #999; font-style: italic; }
+
+  /* Widget de la Liga Profesional, fijo en la esquina de abajo a la derecha */
+  .liga { position: fixed; right: 16px; bottom: 16px; z-index: 100; font-size: 13px; }
+  .liga-abrir {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 20px;
+    background: #333;
+    color: white;
+    font-size: 14px;
+    box-shadow: 2px 4px 8px rgba(0, 0, 0, 0.18);
+  }
+  .liga-panel {
+    display: none;
+    width: 300px;
+    max-width: calc(100vw - 32px);
+    background: #fffdf0;
+    border: 1px solid #e0d58a;
+    border-radius: 8px;
+    box-shadow: 2px 4px 12px rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+  }
+  .liga.abierta .liga-abrir { display: none; }
+  .liga.abierta .liga-panel { display: block; }
+  .liga-cabecera { display: flex; align-items: center; gap: 4px; padding: 8px 10px; background: #e0d58a; }
+  .liga-cabecera strong { flex: 1; }
+  .liga-cabecera button { border: none; background: none; font-size: 14px; color: #555; }
+  .liga-pestanas { display: flex; }
+  .liga-pestanas button { flex: 1; padding: 6px; border: none; background: #f3eaa9; font-size: 13px; }
+  .liga-pestanas button.activa { background: #fffdf0; font-weight: bold; }
+  .liga-contenido { max-height: 50vh; overflow-y: auto; padding: 4px 10px; }
+  .liga-pie { padding: 4px 10px 6px; color: #999; font-size: 11px; }
+  .liga-aviso { color: #999; font-style: italic; padding: 10px 0; }
+  .liga-dia { margin: 8px 0 2px; color: #777; font-weight: bold; text-transform: capitalize; }
+  .liga-partido {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 6px;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px dashed #eee3a8;
+  }
+  .liga-partido .local { text-align: right; }
+  .liga-resultado { min-width: 50px; text-align: center; font-weight: bold; }
+  .liga-resultado small { display: block; color: #777; font-size: 11px; font-weight: normal; }
+  .liga-resultado.vivo small { color: #d33; font-weight: bold; }
+  .liga table { width: 100%; border-collapse: collapse; }
+  .liga th, .liga td { padding: 3px 2px; text-align: right; }
+  .liga th { color: #777; font-weight: normal; border-bottom: 1px solid #e0d58a; }
+  .liga .equipo { text-align: left; }
+  .liga tr + tr td { border-top: 1px dashed #eee3a8; }
+  .liga img { width: 16px; height: 16px; vertical-align: middle; }
 </style>
 </head>
 <body>
@@ -94,6 +146,24 @@
   <button onclick="borrarHechas()">Borrar tareas tachadas</button>
   <button onclick="renombrarProyecto()">Renombrar proyecto</button>
   <button onclick="borrarProyecto()">Borrar proyecto</button>
+</div>
+
+<!-- Widget de la Liga Profesional (esquina de abajo a la derecha) -->
+<div class="liga" id="liga">
+  <button class="liga-abrir" id="ligaAbrir">⚽ Liga Profesional</button>
+  <div class="liga-panel">
+    <div class="liga-cabecera">
+      <strong>Liga Profesional</strong>
+      <button id="ligaRecargar" title="Actualizar">↻</button>
+      <button id="ligaCerrar" title="Minimizar">—</button>
+    </div>
+    <div class="liga-pestanas">
+      <button data-pestana="partidos">Partidos</button>
+      <button data-pestana="tabla">Tabla anual</button>
+    </div>
+    <div class="liga-contenido" id="ligaContenido"></div>
+    <div class="liga-pie" id="ligaPie"></div>
+  </div>
 </div>
 
 <script>
@@ -235,6 +305,231 @@
     new Date().toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long" });
 
   dibujar();
+</script>
+
+<script>
+  // ---------- LIGA PROFESIONAL (widget de la esquina) ----------
+  // Los datos salen de la API pública de ESPN. No pide clave, pero no es oficial:
+  // si ESPN la cambia, el widget muestra un aviso en vez de romper la página.
+  // "arg.1" es el código que usa ESPN para la Liga Profesional argentina.
+  const ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer/arg.1/scoreboard";
+  const UNA_HORA = 60 * 60 * 1000;
+
+  // Lo que recuerda el widget: si está abierto, en qué pestaña y la última tabla calculada.
+  // La tabla anual necesita todos los partidos del año, así que se recalcula como mucho una vez por hora.
+  let liga = JSON.parse(localStorage.getItem("ligaWidget")) || {
+    abierto: window.innerWidth >= 1360, // si la pantalla no es bien ancha arranca minimizado para no tapar las tareas
+    pestana: "partidos",
+    tabla: null
+  };
+
+  function guardarLiga() {
+    localStorage.setItem("ligaWidget", JSON.stringify(liga));
+  }
+
+  // ---------- PEDIR DATOS A ESPN ----------
+  // ESPN no acepta rangos de fechas para esta liga: se le pide un mes entero (202610) o un año (2026)
+  function mesESPN(fecha) {
+    return fecha.getFullYear() + String(fecha.getMonth() + 1).padStart(2, "0");
+  }
+
+  // "21:00"
+  function hora(fecha) {
+    return fecha.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+
+  function sumarDias(fecha, dias) {
+    const nueva = new Date(fecha);
+    nueva.setDate(nueva.getDate() + dias);
+    return nueva;
+  }
+
+  async function traerPartidos(fechas) {
+    const respuesta = await fetch(ESPN + "?limit=1000&dates=" + fechas);
+    if (!respuesta.ok) throw new Error("ESPN respondió " + respuesta.status);
+    const json = await respuesta.json();
+    return (json.events || []).map(leerPartido);
+  }
+
+  // Pasa un partido de ESPN a algo más fácil de usar
+  function leerPartido(ev) {
+    const comp = ev.competitions[0];
+    const local = comp.competitors.find(c => c.homeAway === "home");
+    const visitante = comp.competitors.find(c => c.homeAway === "away");
+    return {
+      id: ev.id,
+      fecha: new Date(ev.date),
+      estado: ev.status.type,        // estado.state: "pre" (no empezó), "in" (en juego) o "post" (terminó)
+      reloj: ev.status.displayClock, // minuto de juego, ej. "67'"
+      eliminatoria: esEliminatoria(ev),
+      local: leerEquipo(local),
+      visitante: leerEquipo(visitante)
+    };
+  }
+
+  function leerEquipo(c) {
+    const goles = c.score && typeof c.score === "object" ? c.score.value : c.score;
+    return {
+      id: c.team.id,
+      nombre: c.team.shortDisplayName || c.team.displayName,
+      logo: c.team.logo,
+      goles: Number(goles) || 0
+    };
+  }
+
+  // Octavos, cuartos, semis y final no suman en la tabla anual.
+  // ESPN marca la etapa en season.slug: "torneo-apertura" y "torneo-clausura" son la fase regular,
+  // y los playoffs vienen como "apertura---round-of-16", "apertura---quarterfinals", "apertura---final", etc.
+  function esEliminatoria(ev) {
+    const etapa = (ev.season && ev.season.slug) || "";
+    return /round|quarter|semi|final|playoff/i.test(etapa);
+  }
+
+  // ---------- PESTAÑA PARTIDOS ----------
+  // Muestra los partidos de 3 días atrás a 7 días adelante, agrupados por día
+  async function cargarPartidos() {
+    const desde = sumarDias(new Date(), -3);
+    const hasta = sumarDias(new Date(), 7);
+    desde.setHours(0, 0, 0, 0);
+    hasta.setHours(23, 59, 59, 999);
+    // Si la semana cae entre dos meses, se piden los dos
+    const meses = [...new Set([mesESPN(desde), mesESPN(hasta)])];
+    const partidos = (await Promise.all(meses.map(traerPartidos))).flat()
+      .filter(p => p.fecha >= desde && p.fecha <= hasta);
+    if (partidos.length === 0) return '<div class="liga-aviso">No hay partidos esta semana.</div>';
+
+    partidos.sort((a, b) => a.fecha - b.fecha);
+    let html = "";
+    let diaAnterior = "";
+    for (const p of partidos) {
+      const dia = p.fecha.toLocaleDateString("es-AR", { weekday: "long" }) + " " + p.fecha.getDate() + "/" + (p.fecha.getMonth() + 1);
+      if (dia !== diaAnterior) {
+        html += '<div class="liga-dia">' + dia + "</div>";
+        diaAnterior = dia;
+      }
+      html += '<div class="liga-partido">' +
+        '<span class="local">' + escapar(p.local.nombre) + " " + logo(p.local.logo) + "</span>" +
+        resultado(p) +
+        "<span>" + logo(p.visitante.logo) + " " + escapar(p.visitante.nombre) + "</span>" +
+        "</div>";
+    }
+    return html;
+  }
+
+  // El cuadradito del medio: la hora si no empezó, el resultado si se está jugando o terminó
+  function resultado(p) {
+    const tipo = p.estado.name || "";
+    const goles = p.local.goles + " - " + p.visitante.goles;
+    if (p.estado.state === "pre") {
+      return '<span class="liga-resultado">' + hora(p.fecha) + "</span>";
+    }
+    if (p.estado.state === "in") {
+      const minuto = tipo === "STATUS_HALFTIME" ? "Entretiempo" : (p.reloj || "En juego");
+      return '<span class="liga-resultado vivo">' + goles + "<small>" + escapar(minuto) + "</small></span>";
+    }
+    if (p.estado.completed) {
+      return '<span class="liga-resultado">' + goles + "<small>Final</small></span>";
+    }
+    // Terminó sin jugarse
+    const motivo = tipo.includes("POSTPONED") ? "Postergado" : tipo.includes("CANCELED") ? "Cancelado" : "Suspendido";
+    return '<span class="liga-resultado">–<small>' + motivo + "</small></span>";
+  }
+
+  // ---------- PESTAÑA TABLA ANUAL ----------
+  // Tabla anual = puntos del Apertura + puntos del Clausura.
+  // ESPN no la da armada, así que la calculamos con los partidos terminados del año.
+  async function cargarTabla() {
+    if (!liga.tabla || Date.now() - liga.tabla.hora > UNA_HORA) {
+      const partidos = await traerPartidos(new Date().getFullYear());
+      liga.tabla = { hora: Date.now(), filas: calcularTabla(partidos) };
+      guardarLiga();
+    }
+
+    const filas = liga.tabla.filas;
+    if (filas.length === 0) return '<div class="liga-aviso">Todavía no hay partidos jugados este año.</div>';
+    let html = '<table><tr><th>#</th><th class="equipo">Equipo</th><th>PJ</th><th>DG</th><th>Pts</th></tr>';
+    filas.forEach((f, i) => {
+      html += "<tr><td>" + (i + 1) + '</td><td class="equipo">' + logo(f.logo) + " " + escapar(f.nombre) + "</td>" +
+        "<td>" + f.pj + "</td><td>" + (f.dg > 0 ? "+" + f.dg : f.dg) + "</td><td><strong>" + f.pts + "</strong></td></tr>";
+    });
+    return html + "</table>";
+  }
+
+  function calcularTabla(partidos) {
+    const equipos = {};
+    function sumar(equipo, favor, contra) {
+      if (!equipos[equipo.id]) equipos[equipo.id] = { nombre: equipo.nombre, logo: equipo.logo, pj: 0, dg: 0, gf: 0, pts: 0 };
+      const fila = equipos[equipo.id];
+      fila.pj++;
+      fila.gf += favor;
+      fila.dg += favor - contra;
+      fila.pts += favor > contra ? 3 : favor === contra ? 1 : 0;
+    }
+    for (const p of partidos) {
+      if (!p.estado.completed || p.eliminatoria) continue;
+      sumar(p.local, p.local.goles, p.visitante.goles);
+      sumar(p.visitante, p.visitante.goles, p.local.goles);
+    }
+    // Desempate: puntos, después diferencia de gol, después goles a favor
+    return Object.values(equipos).sort((a, b) => b.pts - a.pts || b.dg - a.dg || b.gf - a.gf);
+  }
+
+  // ---------- DIBUJAR EL WIDGET ----------
+  function escapar(texto) {
+    const div = document.createElement("div");
+    div.textContent = texto;
+    return div.innerHTML;
+  }
+
+  function logo(url) {
+    return url ? '<img src="' + escapar(url) + '" alt="" loading="lazy" onerror="this.remove()">' : "";
+  }
+
+  async function dibujarLiga() {
+    document.getElementById("liga").classList.toggle("abierta", liga.abierto);
+    document.querySelectorAll(".liga-pestanas button").forEach(boton => {
+      boton.classList.toggle("activa", boton.dataset.pestana === liga.pestana);
+    });
+    if (!liga.abierto) return;
+
+    const contenido = document.getElementById("ligaContenido");
+    const pie = document.getElementById("ligaPie");
+    const pestana = liga.pestana;
+    // "Cargando..." solo al cambiar de pestaña; al actualizar se deja lo anterior hasta que llegue lo nuevo
+    if (contenido.dataset.pestana !== pestana) {
+      contenido.innerHTML = '<div class="liga-aviso">Cargando...</div>';
+      contenido.dataset.pestana = pestana;
+    }
+    let html;
+    try {
+      html = pestana === "partidos" ? await cargarPartidos() : await cargarTabla();
+    } catch (error) {
+      console.error(error);
+      html = '<div class="liga-aviso">No se pudieron cargar los datos de ESPN. Probá de nuevo en un rato.</div>';
+    }
+    // Si mientras cargaba se cambió de pestaña o se minimizó, no pisamos lo nuevo
+    if (pestana !== liga.pestana || !liga.abierto) return;
+    const scroll = contenido.scrollTop;
+    contenido.innerHTML = html;
+    contenido.scrollTop = scroll;
+    const actualizado = pestana === "tabla" && liga.tabla ? new Date(liga.tabla.hora) : new Date();
+    pie.textContent = "Datos: ESPN · actualizado " + hora(actualizado);
+  }
+
+  document.getElementById("ligaAbrir").onclick = () => { liga.abierto = true; guardarLiga(); dibujarLiga(); };
+  document.getElementById("ligaCerrar").onclick = () => { liga.abierto = false; guardarLiga(); dibujarLiga(); };
+  document.getElementById("ligaRecargar").onclick = () => {
+    if (liga.pestana === "tabla") liga.tabla = null; // fuerza a recalcular la tabla
+    dibujarLiga();
+  };
+  document.querySelectorAll(".liga-pestanas button").forEach(boton => {
+    boton.onclick = () => { liga.pestana = boton.dataset.pestana; guardarLiga(); dibujarLiga(); };
+  });
+
+  // Los resultados se actualizan solos cada 3 minutos mientras se ven los partidos
+  setInterval(() => { if (liga.abierto && liga.pestana === "partidos") dibujarLiga(); }, 3 * 60 * 1000);
+
+  dibujarLiga();
 </script>
 </body>
 </html>
