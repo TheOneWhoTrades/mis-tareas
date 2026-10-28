@@ -328,9 +328,9 @@
   }
 
   // ---------- PEDIR DATOS A ESPN ----------
-  // ESPN pide las fechas pegadas: 20261028
-  function fechaESPN(fecha) {
-    return fecha.getFullYear() + String(fecha.getMonth() + 1).padStart(2, "0") + String(fecha.getDate()).padStart(2, "0");
+  // ESPN no acepta rangos de fechas para esta liga: se le pide un mes entero (202610) o un año (2026)
+  function mesESPN(fecha) {
+    return fecha.getFullYear() + String(fecha.getMonth() + 1).padStart(2, "0");
   }
 
   // "21:00"
@@ -344,8 +344,8 @@
     return nueva;
   }
 
-  async function traerPartidos(desde, hasta) {
-    const respuesta = await fetch(ESPN + "?limit=300&dates=" + fechaESPN(desde) + "-" + fechaESPN(hasta));
+  async function traerPartidos(fechas) {
+    const respuesta = await fetch(ESPN + "?limit=1000&dates=" + fechas);
     if (!respuesta.ok) throw new Error("ESPN respondió " + respuesta.status);
     const json = await respuesta.json();
     return (json.events || []).map(leerPartido);
@@ -361,7 +361,7 @@
       fecha: new Date(ev.date),
       estado: ev.status.type,        // estado.state: "pre" (no empezó), "in" (en juego) o "post" (terminó)
       reloj: ev.status.displayClock, // minuto de juego, ej. "67'"
-      eliminatoria: esEliminatoria(ev, comp),
+      eliminatoria: esEliminatoria(ev),
       local: leerEquipo(local),
       visitante: leerEquipo(visitante)
     };
@@ -378,17 +378,24 @@
   }
 
   // Octavos, cuartos, semis y final no suman en la tabla anual.
-  // ESPN no lo marca de una forma fija, así que buscamos esas palabras en el nombre de la etapa.
-  function esEliminatoria(ev, comp) {
-    const textos = [ev.season && ev.season.slug].concat((comp.notes || []).map(n => n.headline));
-    return textos.some(t => t && /playoff|knockout|round of|quarter|semi|final|octavos|cuartos/i.test(t));
+  // ESPN marca la etapa en season.slug: "torneo-apertura" y "torneo-clausura" son la fase regular,
+  // y los playoffs vienen como "apertura---round-of-16", "apertura---quarterfinals", "apertura---final", etc.
+  function esEliminatoria(ev) {
+    const etapa = (ev.season && ev.season.slug) || "";
+    return /round|quarter|semi|final|playoff/i.test(etapa);
   }
 
   // ---------- PESTAÑA PARTIDOS ----------
   // Muestra los partidos de 3 días atrás a 7 días adelante, agrupados por día
   async function cargarPartidos() {
-    const hoy = new Date();
-    const partidos = await traerPartidos(sumarDias(hoy, -3), sumarDias(hoy, 7));
+    const desde = sumarDias(new Date(), -3);
+    const hasta = sumarDias(new Date(), 7);
+    desde.setHours(0, 0, 0, 0);
+    hasta.setHours(23, 59, 59, 999);
+    // Si la semana cae entre dos meses, se piden los dos
+    const meses = [...new Set([mesESPN(desde), mesESPN(hasta)])];
+    const partidos = (await Promise.all(meses.map(traerPartidos))).flat()
+      .filter(p => p.fecha >= desde && p.fecha <= hasta);
     if (partidos.length === 0) return '<div class="liga-aviso">No hay partidos esta semana.</div>';
 
     partidos.sort((a, b) => a.fecha - b.fecha);
@@ -430,18 +437,10 @@
 
   // ---------- PESTAÑA TABLA ANUAL ----------
   // Tabla anual = puntos del Apertura + puntos del Clausura.
-  // ESPN no la da armada, así que la calculamos con los partidos terminados del año
-  // (se piden mes por mes para que ninguna respuesta sea enorme).
+  // ESPN no la da armada, así que la calculamos con los partidos terminados del año.
   async function cargarTabla() {
     if (!liga.tabla || Date.now() - liga.tabla.hora > UNA_HORA) {
-      const hoy = new Date();
-      const pedidos = [];
-      for (let mes = 0; mes <= hoy.getMonth(); mes++) {
-        const primerDia = new Date(hoy.getFullYear(), mes, 1);
-        const ultimoDia = new Date(hoy.getFullYear(), mes + 1, 0);
-        pedidos.push(traerPartidos(primerDia, ultimoDia));
-      }
-      const partidos = (await Promise.all(pedidos)).flat();
+      const partidos = await traerPartidos(new Date().getFullYear());
       liga.tabla = { hora: Date.now(), filas: calcularTabla(partidos) };
       guardarLiga();
     }
@@ -458,7 +457,6 @@
 
   function calcularTabla(partidos) {
     const equipos = {};
-    const vistos = {};
     function sumar(equipo, favor, contra) {
       if (!equipos[equipo.id]) equipos[equipo.id] = { nombre: equipo.nombre, logo: equipo.logo, pj: 0, dg: 0, gf: 0, pts: 0 };
       const fila = equipos[equipo.id];
@@ -468,8 +466,7 @@
       fila.pts += favor > contra ? 3 : favor === contra ? 1 : 0;
     }
     for (const p of partidos) {
-      if (vistos[p.id] || !p.estado.completed || p.eliminatoria) continue;
-      vistos[p.id] = true;
+      if (!p.estado.completed || p.eliminatoria) continue;
       sumar(p.local, p.local.goles, p.visitante.goles);
       sumar(p.visitante, p.visitante.goles, p.local.goles);
     }
