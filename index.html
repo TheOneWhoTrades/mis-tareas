@@ -394,12 +394,16 @@
     hasta.setHours(23, 59, 59, 999);
     // Si la semana cae entre dos meses, se piden los dos
     const meses = [...new Set([mesESPN(desde), mesESPN(hasta)])];
-    const partidos = (await Promise.all(meses.map(traerPartidos))).flat()
+    let partidos = (await Promise.all(meses.map(traerPartidos))).flat()
       .filter(p => p.fecha >= desde && p.fecha <= hasta);
-    if (partidos.length === 0) return '<div class="liga-aviso">No hay partidos esta semana.</div>';
+    let html = "";
+    if (partidos.length === 0) {
+      partidos = await proximosPartidos(hasta);
+      if (partidos.length === 0) return '<div class="liga-aviso">No hay partidos programados por ahora.</div>';
+      html = '<div class="liga-aviso">No hay partidos esta semana. Estos son los próximos:</div>';
+    }
 
     partidos.sort((a, b) => a.fecha - b.fecha);
-    let html = "";
     let diaAnterior = "";
     for (const p of partidos) {
       const dia = p.fecha.toLocaleDateString("es-AR", { weekday: "long" }) + " " + p.fecha.getDate() + "/" + (p.fecha.getMonth() + 1);
@@ -414,6 +418,18 @@
         "</div>";
     }
     return html;
+  }
+
+  // Cuando no hay partidos en la semana (por ejemplo, entre la fase regular y los playoffs),
+  // busca en los meses que siguen y devuelve la próxima fecha: los partidos de los 5 días desde el primero.
+  async function proximosPartidos(despuesDe) {
+    const meses = [0, 1, 2, 3].map(n => mesESPN(new Date(despuesDe.getFullYear(), despuesDe.getMonth() + n, 1)));
+    const futuros = (await Promise.all(meses.map(traerPartidos))).flat()
+      .filter(p => p.fecha > despuesDe)
+      .sort((a, b) => a.fecha - b.fecha);
+    if (futuros.length === 0) return [];
+    const limite = sumarDias(futuros[0].fecha, 5);
+    return futuros.filter(p => p.fecha < limite);
   }
 
   // El cuadradito del medio: la hora si no empezó, el resultado si se está jugando o terminó
