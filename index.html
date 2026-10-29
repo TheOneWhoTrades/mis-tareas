@@ -126,6 +126,50 @@
   .liga .equipo { text-align: left; }
   .liga tr + tr td { border-top: 1px dashed #eee3a8; }
   .liga img { width: 16px; height: 16px; vertical-align: middle; }
+
+  /* Widgets chicos de la esquina de abajo a la izquierda (dólar y clima) */
+  .izq {
+    position: fixed;
+    left: 16px;
+    bottom: 16px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .mini-abrir {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 20px;
+    background: #333;
+    color: white;
+    font-size: 14px;
+    box-shadow: 2px 4px 8px rgba(0, 0, 0, 0.18);
+  }
+  .mini-panel {
+    display: none;
+    width: 220px;
+    background: #fffdf0;
+    border: 1px solid #e0d58a;
+    border-radius: 8px;
+    box-shadow: 2px 4px 12px rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+  }
+  .mini.abierto .mini-abrir { display: none; }
+  .mini.abierto .mini-panel { display: block; }
+  .mini-cabecera { display: flex; align-items: center; padding: 6px 10px; background: #e0d58a; }
+  .mini-cabecera strong { flex: 1; }
+  .mini-cabecera button { border: none; background: none; font-size: 14px; color: #555; }
+  .mini-contenido { padding: 4px 10px; }
+  .mini-pie { padding: 4px 10px 6px; color: #999; font-size: 11px; }
+  .mini-aviso { color: #999; font-style: italic; padding: 8px 0; }
+  .mini table { width: 100%; border-collapse: collapse; }
+  .mini th, .mini td { padding: 3px 2px; text-align: right; }
+  .mini th { color: #777; font-weight: normal; border-bottom: 1px solid #e0d58a; }
+  .mini th:first-child, .mini td:first-child { text-align: left; }
+  .mini tr + tr td { border-top: 1px dashed #eee3a8; }
 </style>
 </head>
 <body>
@@ -163,6 +207,21 @@
     </div>
     <div class="liga-contenido" id="ligaContenido"></div>
     <div class="liga-pie" id="ligaPie"></div>
+  </div>
+</div>
+
+<!-- Widgets de la esquina de abajo a la izquierda. Minimizados muestran el dato principal. -->
+<div class="izq">
+  <div class="mini" id="dolar">
+    <button class="mini-abrir">💵 Dólar</button>
+    <div class="mini-panel">
+      <div class="mini-cabecera">
+        <strong>Dólar</strong>
+        <button class="mini-cerrar" title="Minimizar">—</button>
+      </div>
+      <div class="mini-contenido"><div class="mini-aviso">Cargando...</div></div>
+      <div class="mini-pie"></div>
+    </div>
   </div>
 </div>
 
@@ -546,6 +605,76 @@
   setInterval(() => { if (liga.abierto && liga.pestana === "partidos") dibujarLiga(); }, 3 * 60 * 1000);
 
   dibujarLiga();
+</script>
+
+<script>
+  // ---------- WIDGETS DE LA IZQUIERDA (dólar y clima) ----------
+  // Usan escapar() y hora() del script de la liga.
+
+  // Cuáles están abiertos. Si la pantalla no es ancha arrancan minimizados para no tapar las tareas.
+  let izq = JSON.parse(localStorage.getItem("widgetsIzq")) || {};
+
+  function guardarIzq() {
+    localStorage.setItem("widgetsIzq", JSON.stringify(izq));
+  }
+
+  // Arma el abrir/minimizar de un widget. "cargar" trae los datos y se repite cada tantos minutos:
+  // corre aunque esté minimizado, porque el botón minimizado también muestra el dato principal.
+  function prepararMini(id, cargar, minutos) {
+    const caja = document.getElementById(id);
+    if (izq[id] === undefined) izq[id] = window.innerWidth >= 1200;
+    function dibujar() { caja.classList.toggle("abierto", izq[id]); }
+    caja.querySelector(".mini-abrir").onclick = () => { izq[id] = true; guardarIzq(); dibujar(); };
+    caja.querySelector(".mini-cerrar").onclick = () => { izq[id] = false; guardarIzq(); dibujar(); };
+    dibujar();
+    cargar(caja);
+    setInterval(() => cargar(caja), minutos * 60 * 1000);
+  }
+
+  // "hoy 17:55" o "28/10 17:55"
+  function cuando(fecha) {
+    const hoy = new Date().toDateString() === fecha.toDateString();
+    return (hoy ? "hoy" : fecha.getDate() + "/" + (fecha.getMonth() + 1)) + " " + hora(fecha);
+  }
+
+  // ---------- DÓLAR ----------
+  // Cotizaciones de DolarApi (dolarapi.com): gratis y sin clave. Toma los valores de DolarHoy.
+  // Cada cotización viene así: { casa: "blue", nombre: "Blue", compra: 1545, venta: 1565, fechaActualizacion: "..." }
+  const DOLAR_API = "https://dolarapi.com/v1/dolares";
+  const NOMBRES_DOLAR = {
+    oficial: "Oficial", blue: "Blue", bolsa: "MEP", contadoconliqui: "CCL",
+    mayorista: "Mayorista", cripto: "Cripto", tarjeta: "Tarjeta"
+  };
+
+  function pesos(valor) {
+    return typeof valor === "number" ? "$" + valor.toLocaleString("es-AR", { maximumFractionDigits: 0 }) : "–";
+  }
+
+  async function cargarDolar(caja) {
+    const contenido = caja.querySelector(".mini-contenido");
+    try {
+      const respuesta = await fetch(DOLAR_API);
+      if (!respuesta.ok) throw new Error("DolarApi respondió " + respuesta.status);
+      const cotizaciones = await respuesta.json();
+
+      let html = "<table><tr><th></th><th>Compra</th><th>Venta</th></tr>";
+      for (const c of cotizaciones) {
+        html += "<tr><td>" + escapar(NOMBRES_DOLAR[c.casa] || c.nombre) + "</td>" +
+          "<td>" + pesos(c.compra) + "</td><td><strong>" + pesos(c.venta) + "</strong></td></tr>";
+      }
+      contenido.innerHTML = html + "</table>";
+
+      const blue = cotizaciones.find(c => c.casa === "blue");
+      if (blue) caja.querySelector(".mini-abrir").textContent = "💵 Blue " + pesos(blue.venta);
+      const ultima = new Date(Math.max(...cotizaciones.map(c => new Date(c.fechaActualizacion))));
+      caja.querySelector(".mini-pie").textContent = "Datos: DolarApi · " + cuando(ultima);
+    } catch (error) {
+      console.error(error);
+      contenido.innerHTML = '<div class="mini-aviso">No se pudo cargar el dólar. Probá de nuevo en un rato.</div>';
+    }
+  }
+
+  prepararMini("dolar", cargarDolar, 10);
 </script>
 </body>
 </html>
