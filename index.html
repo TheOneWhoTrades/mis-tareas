@@ -170,6 +170,10 @@
   .mini th { color: #777; font-weight: normal; border-bottom: 1px solid #e0d58a; }
   .mini th:first-child, .mini td:first-child { text-align: left; }
   .mini tr + tr td { border-top: 1px dashed #eee3a8; }
+  .mini-pie a { color: inherit; }
+  .clima-ahora { display: flex; align-items: center; gap: 8px; padding: 6px 0 2px; }
+  .clima-temp { font-size: 26px; font-weight: bold; white-space: nowrap; }
+  .clima-detalle { padding-bottom: 6px; border-bottom: 1px solid #e0d58a; color: #777; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -212,6 +216,17 @@
 
 <!-- Widgets de la esquina de abajo a la izquierda. Minimizados muestran el dato principal. -->
 <div class="izq">
+  <div class="mini" id="clima">
+    <button class="mini-abrir">🌡️ Clima</button>
+    <div class="mini-panel">
+      <div class="mini-cabecera">
+        <strong>Clima en CABA</strong>
+        <button class="mini-cerrar" title="Minimizar">—</button>
+      </div>
+      <div class="mini-contenido"><div class="mini-aviso">Cargando...</div></div>
+      <div class="mini-pie"></div>
+    </div>
+  </div>
   <div class="mini" id="dolar">
     <button class="mini-abrir">💵 Dólar</button>
     <div class="mini-panel">
@@ -675,6 +690,77 @@
   }
 
   prepararMini("dolar", cargarDolar, 10);
+
+  // ---------- CLIMA ----------
+  // Pronóstico de Open-Meteo (open-meteo.com): gratis para uso no comercial y sin clave.
+  // Pide que se lo nombre donde se muestran los datos, por eso el link de abajo.
+  // Las coordenadas son las del centro de CABA.
+  const CLIMA_API = "https://api.open-meteo.com/v1/forecast?latitude=-34.61&longitude=-58.38" +
+    "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day" +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+    "&timezone=America%2FArgentina%2FBuenos_Aires&forecast_days=3";
+
+  // Códigos de tiempo de la OMM que usa Open-Meteo en weather_code
+  const TIEMPO = {
+    0: ["☀️", "Despejado"], 1: ["🌤️", "Mayormente despejado"], 2: ["⛅", "Parcialmente nublado"], 3: ["☁️", "Nublado"],
+    45: ["🌫️", "Niebla"], 48: ["🌫️", "Niebla con escarcha"],
+    51: ["🌦️", "Llovizna leve"], 53: ["🌦️", "Llovizna"], 55: ["🌧️", "Llovizna intensa"],
+    56: ["🌧️", "Llovizna helada"], 57: ["🌧️", "Llovizna helada"],
+    61: ["🌦️", "Lluvia leve"], 63: ["🌧️", "Lluvia"], 65: ["🌧️", "Lluvia fuerte"],
+    66: ["🌧️", "Lluvia helada"], 67: ["🌧️", "Lluvia helada"],
+    71: ["🌨️", "Nevada leve"], 73: ["🌨️", "Nevada"], 75: ["❄️", "Nevada fuerte"], 77: ["🌨️", "Nieve granulada"],
+    80: ["🌦️", "Chaparrones leves"], 81: ["🌧️", "Chaparrones"], 82: ["⛈️", "Chaparrones fuertes"],
+    85: ["🌨️", "Chaparrones de nieve"], 86: ["🌨️", "Chaparrones de nieve"],
+    95: ["⛈️", "Tormenta"], 96: ["⛈️", "Tormenta con granizo"], 99: ["⛈️", "Tormenta con granizo"]
+  };
+
+  function tiempo(codigo, esDeDia) {
+    const [icono, texto] = TIEMPO[codigo] || ["🌡️", ""];
+    // De noche, el sol de "despejado" pasa a ser luna
+    return [!esDeDia && codigo <= 1 ? "🌙" : icono, texto];
+  }
+
+  function grados(valor) {
+    return Math.round(valor) + "°";
+  }
+
+  async function cargarClima(caja) {
+    const contenido = caja.querySelector(".mini-contenido");
+    try {
+      const respuesta = await fetch(CLIMA_API);
+      if (!respuesta.ok) throw new Error("Open-Meteo respondió " + respuesta.status);
+      const { current: ahora, daily: dias } = await respuesta.json();
+
+      const [icono, texto] = tiempo(ahora.weather_code, ahora.is_day === 1);
+      let html = '<div class="clima-ahora"><span class="clima-temp">' + icono + " " + grados(ahora.temperature_2m) + "</span>" +
+        "<span>" + texto + "</span></div>" +
+        '<div class="clima-detalle">Sensación ' + grados(ahora.apparent_temperature) +
+        " · Humedad " + ahora.relative_humidity_2m + "%" +
+        " · Viento " + Math.round(ahora.wind_speed_10m) + " km/h</div>";
+
+      // Hoy, mañana y pasado: mínima / máxima y probabilidad de lluvia
+      html += "<table>";
+      dias.time.forEach((dia, i) => {
+        const nombre = i === 0 ? "Hoy" : i === 1 ? "Mañana" :
+          new Date(dia + "T12:00").toLocaleDateString("es-AR", { weekday: "long" }).replace(/^./, l => l.toUpperCase());
+        const [iconoDia, textoDia] = tiempo(dias.weather_code[i], true);
+        html += "<tr><td>" + nombre + '</td><td title="' + textoDia + '">' + iconoDia + "</td>" +
+          "<td>" + grados(dias.temperature_2m_min[i]) + " / <strong>" + grados(dias.temperature_2m_max[i]) + "</strong></td>" +
+          '<td title="Probabilidad de lluvia">💧' + dias.precipitation_probability_max[i] + "%</td></tr>";
+      });
+      contenido.innerHTML = html + "</table>";
+
+      caja.querySelector(".mini-abrir").textContent = icono + " " + grados(ahora.temperature_2m);
+      caja.querySelector(".mini-pie").innerHTML = 'Datos: <a href="https://open-meteo.com/" target="_blank">Open-Meteo.com</a> · ' +
+        cuando(new Date(ahora.time));
+    } catch (error) {
+      console.error(error);
+      contenido.innerHTML = '<div class="mini-aviso">No se pudo cargar el clima. Probá de nuevo en un rato.</div>';
+    }
+  }
+
+  // Open-Meteo actualiza el dato actual cada 15 minutos
+  prepararMini("clima", cargarClima, 15);
 </script>
 </body>
 </html>
